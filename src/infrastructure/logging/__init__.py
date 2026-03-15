@@ -15,22 +15,7 @@ def get_logger(name: str = _LOGGER_NAME) -> logging.Logger:
     Returns:
         Logger instance.
     """
-    logger = logging.getLogger(name)
-
-    # Если handler'ов нет — настраиваем (идемпотентность)
-    if not logger.handlers:
-        logger.setLevel(logging.INFO)
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-        )
-        logger.addHandler(handler)
-        logger.propagate = False
-
-    return logger
+    return logging.getLogger(name)
 
 
 def setup_logger(debug: bool = False) -> logging.Logger:

@@ -1,5 +1,6 @@
 """Application entry point."""
 
+import logging
 import sys
 
 from src.infrastructure.config import get_settings
@@ -29,6 +30,8 @@ def main() -> int:
         return 0
 
     except Exception as exc:
+        logger = logging.getLogger("app")
+        logger.exception("Fatal error: %s", exc)
         print(f"Fatal error: {exc}", file=sys.stderr)
         return 1
 
