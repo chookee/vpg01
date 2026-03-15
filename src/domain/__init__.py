@@ -1,6 +1,12 @@
 """Domain layer – business logic and entities."""
 
 from src.domain.enums import MemoryMode
+from src.domain.exceptions import (
+    DomainError,
+    MessageNotFoundError,
+    SessionNotFoundError,
+    UserNotFoundError,
+)
 from src.domain.interfaces.llm_service import LLMService, LLMServiceError
 from src.domain.interfaces.logger import Logger
 from src.domain.interfaces.repositories import (
@@ -11,6 +17,11 @@ from src.domain.interfaces.repositories import (
 
 __all__ = [
     "MemoryMode",
+    # Exceptions
+    "DomainError",
+    "MessageNotFoundError",
+    "SessionNotFoundError",
+    "UserNotFoundError",
     # Interfaces
     "MessageRepository",
     "SessionRepository",

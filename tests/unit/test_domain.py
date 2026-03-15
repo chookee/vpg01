@@ -4,10 +4,51 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.domain.entities.message import Message
+from src.domain.entities.message import MAX_CONTENT_LENGTH, Message
 from src.domain.entities.session import Session
 from src.domain.entities.user import User
 from src.domain.enums import MemoryMode
+from src.domain.exceptions import (
+    DomainError,
+    MessageNotFoundError,
+    SessionNotFoundError,
+    UserNotFoundError,
+)
+
+
+class TestDomainExceptions:
+    """Domain exceptions tests."""
+
+    def test_domain_error_is_exception(self) -> None:
+        """DomainError should be an Exception."""
+        assert issubclass(DomainError, Exception)
+
+    def test_message_not_found_error(self) -> None:
+        """MessageNotFoundError should contain message_id."""
+        error = MessageNotFoundError(42)
+        assert error.message_id == 42
+        assert "42" in str(error)
+
+    def test_session_not_found_error(self) -> None:
+        """SessionNotFoundError should contain session_id."""
+        error = SessionNotFoundError(99)
+        assert error.session_id == 99
+        assert "99" in str(error)
+
+    def test_user_not_found_error_by_user_id(self) -> None:
+        """UserNotFoundError should work with user_id."""
+        error = UserNotFoundError(user_id=123)
+        assert "123" in str(error)
+
+    def test_user_not_found_error_by_telegram_id(self) -> None:
+        """UserNotFoundError should work with telegram_id."""
+        error = UserNotFoundError(telegram_id=456)
+        assert "456" in str(error)
+
+    def test_user_not_found_error_no_id(self) -> None:
+        """UserNotFoundError should work without IDs."""
+        error = UserNotFoundError()
+        assert "User not found" in str(error)
 
 
 class TestUser:
@@ -159,11 +200,27 @@ class TestMessage:
             Message(message_id=1, session_id=1, role="user", content="\n")
 
     def test_create_message_invalid_role(self) -> None:
-        """Test that invalid role is rejected (type check)."""
-        # Literal тип проверяется статически mypy, но runtime проверка через dataclass:
-        msg = Message(message_id=1, session_id=1, role="system", content="Test")  # type: ignore
-        # При строгой типизации это должно быть отловлено mypy
-        assert msg.role == "system"  # type: ignore
+        """Test that invalid role is rejected."""
+        with pytest.raises(ValueError, match="role must be 'user' or 'assistant'"):
+            Message(message_id=1, session_id=1, role="system", content="Test")
+
+    def test_create_message_content_too_long(self) -> None:
+        """Test that content exceeding MAX_CONTENT_LENGTH is rejected."""
+        long_content = "x" * (MAX_CONTENT_LENGTH + 1)
+        with pytest.raises(ValueError, match="content length.*exceeds maximum allowed"):
+            Message(message_id=1, session_id=1, role="user", content=long_content)
+
+    def test_create_message_content_at_limit(self) -> None:
+        """Test that content at exactly MAX_CONTENT_LENGTH is accepted."""
+        content = "x" * MAX_CONTENT_LENGTH
+        msg = Message(message_id=1, session_id=1, role="user", content=content)
+        assert len(msg.content) == MAX_CONTENT_LENGTH
+
+    def test_max_content_length_constant(self) -> None:
+        """Test MAX_CONTENT_LENGTH constant is defined."""
+        assert MAX_CONTENT_LENGTH == 10_000
+        assert isinstance(MAX_CONTENT_LENGTH, int)
+        assert MAX_CONTENT_LENGTH > 0
 
 
 class TestMemoryMode:

@@ -61,6 +61,20 @@ class MessageRepository(Protocol):
         """
         pass
 
+    @abstractmethod
+    async def get_by_sessions_batch(self, session_ids: list[int]) -> list[Message]:
+        """Get messages for multiple sessions efficiently.
+
+        Solves N+1 query problem by fetching all messages in a single database round-trip.
+
+        Args:
+            session_ids: List of session identifiers.
+
+        Returns:
+            List of messages ordered by session_id and timestamp.
+        """
+        pass
+
 
 @runtime_checkable
 class SessionRepository(Protocol):

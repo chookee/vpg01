@@ -35,6 +35,7 @@ def mock_message_repository() -> MessageRepository:
     mock.update = AsyncMock()
     mock.delete = AsyncMock()
     mock.delete_by_session = AsyncMock()
+    mock.get_by_sessions_batch = AsyncMock(return_value=[])
     return mock
 
 
@@ -158,11 +159,11 @@ async def temp_db_path(tmp_path) -> AsyncGenerator[str, None]:
         tmp_path: Pytest temporary directory fixture.
 
     Yields:
-        Path to temporary database file.
+        Path to temporary database file (not URL).
     """
     db_path = tmp_path / "test.db"
     try:
-        yield f"sqlite+aiosqlite:///{db_path}"
+        yield str(db_path)
     finally:
         # Cleanup is handled by pytest's tmp_path fixture
         pass
@@ -181,12 +182,55 @@ async def sqlite_message_repo(
         SQLiteMessageRepository instance.
     """
     # Lazy import to avoid circular dependencies
+    import aiosqlite
+
     from src.infrastructure.repositories.sqlite_message_repo import (
         SQLiteMessageRepository,
     )
 
+    # Pre-create tables with parent records for foreign key constraints
+    async with aiosqlite.connect(temp_db_path, timeout=30.0) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                default_mode TEXT NOT NULL DEFAULT 'no_memory',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                memory_mode TEXT NOT NULL DEFAULT 'no_memory',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                model_used TEXT,
+                memory_mode_at_time TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+            );
+        """)
+        # Create parent records for tests
+        await db.execute(
+            "INSERT INTO users (user_id, telegram_id, default_mode) VALUES (1, 123, 'short_term');"
+        )
+        await db.execute(
+            "INSERT INTO sessions (session_id, user_id, memory_mode) VALUES (1, 1, 'short_term');"
+        )
+        await db.commit()
+
     repo = SQLiteMessageRepository(temp_db_path)
-    await repo._init_db()
     try:
         yield repo
     finally:
@@ -207,12 +251,40 @@ async def sqlite_session_repo(
     Yields:
         SQLiteSessionRepository instance.
     """
+    import aiosqlite
+
     from src.infrastructure.repositories.sqlite_session_repo import (
         SQLiteSessionRepository,
     )
 
+    # Pre-create tables with parent records for foreign key constraints
+    async with aiosqlite.connect(temp_db_path, timeout=30.0) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                default_mode TEXT NOT NULL DEFAULT 'no_memory',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                memory_mode TEXT NOT NULL DEFAULT 'no_memory',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+        """)
+        # Create parent record for tests
+        await db.execute(
+            "INSERT INTO users (user_id, telegram_id, default_mode) VALUES (1, 123, 'short_term');"
+        )
+        await db.commit()
+
     repo = SQLiteSessionRepository(temp_db_path)
-    await repo._init_db()
     try:
         yield repo
     finally:
