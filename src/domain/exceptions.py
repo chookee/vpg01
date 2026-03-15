@@ -5,6 +5,13 @@ class DomainError(Exception):
     """Base exception for domain errors."""
 
 
+class InvalidDataError(DomainError):
+    """Raised when invalid data is provided."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 class MessageNotFoundError(DomainError):
     """Raised when a message is not found."""
 
