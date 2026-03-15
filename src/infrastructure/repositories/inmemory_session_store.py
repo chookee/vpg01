@@ -1,15 +1,21 @@
 """In-memory session store for short-term memory."""
 
+from __future__ import annotations
+
 import asyncio
+import logging
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Deque, Dict, Final, List, Optional
 
 from src.domain.entities.message import Message
 from src.domain.entities.session import Session
 from src.domain.enums import MemoryMode
 from src.domain.exceptions import InvalidDataError
+from src.domain.interfaces.repositories import SessionStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -21,7 +27,7 @@ class SessionData:
     max_messages: int = 50
 
 
-class InMemorySessionStore:
+class InMemorySessionStore(SessionStore):
     """In-memory storage for active sessions and their messages.
 
     Uses asyncio.Lock for thread-safe operations in async context.
@@ -30,33 +36,43 @@ class InMemorySessionStore:
 
     DEFAULT_TTL_SECONDS: Final[int] = 3600
     DEFAULT_MAX_MESSAGES: Final[int] = 50
+    MAX_SESSIONS: Final[int] = 10_000
+    DEFAULT_CLEANUP_INTERVAL: Final[int] = 300  # 5 minutes
 
     def __init__(
         self,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         max_messages: int = DEFAULT_MAX_MESSAGES,
+        max_sessions: int = MAX_SESSIONS,
+        cleanup_interval: int = DEFAULT_CLEANUP_INTERVAL,
     ) -> None:
         """Initialize the in-memory session store.
 
         Args:
             ttl_seconds: Time-to-live for inactive sessions in seconds.
             max_messages: Maximum messages to keep per session in memory.
+            max_sessions: Maximum number of active sessions (DoS protection).
+            cleanup_interval: Interval for background cleanup in seconds.
         """
         self._sessions: Dict[int, SessionData] = {}
-        self._lock: Optional[asyncio.Lock] = None
         self._ttl_seconds: int = ttl_seconds
         self._max_messages: int = max_messages
-        self._current_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._max_sessions: int = max_sessions
+        self._cleanup_interval: int = cleanup_interval
+        # Lazy lock — создаётся при первом использовании в async контексте
+        # Это предотвращает привязку к неправильному event loop
+        self._lock: asyncio.Lock | None = None
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._shutdown_event: asyncio.Event = asyncio.Event()
 
     def _get_lock(self) -> asyncio.Lock:
-        """Get or create lock for current event loop.
-        
-        Lazy initialization ensures lock is bound to correct event loop.
+        """Get or create lock bound to current event loop.
+
+        Returns:
+            asyncio.Lock instance bound to current event loop.
         """
-        current_loop = asyncio.get_event_loop()
-        if self._lock is None or self._current_loop is not current_loop:
+        if self._lock is None:
             self._lock = asyncio.Lock()
-            self._current_loop = current_loop
         return self._lock
 
     async def _validate_session_id(self, session_id: int) -> None:
@@ -66,11 +82,81 @@ class InMemorySessionStore:
                 f"session_id must be positive, got {session_id}"
             )
 
+    async def _evict_oldest_session(self) -> None:
+        """Evict session with oldest last_activity to free space.
+
+        Called when max_sessions limit is reached.
+        """
+        if not self._sessions:
+            return
+
+        oldest_id = min(
+            self._sessions.keys(),
+            key=lambda sid: self._sessions[sid].session.last_activity,
+        )
+        del self._sessions[oldest_id]
+        logger.warning(
+            f"Evicted oldest session {oldest_id} due to max_sessions limit ({self._max_sessions})"
+        )
+
+    async def start_background_cleanup(self) -> None:
+        """Start background task for periodic cleanup.
+
+        This method should be called during application startup.
+        """
+        if self._cleanup_task is not None and not self._cleanup_task.done():
+            logger.warning("Cleanup task already running")
+            return
+
+        self._shutdown_event.clear()
+        self._cleanup_task = asyncio.create_task(
+            self._cleanup_loop(),
+            name="InMemorySessionStore-cleanup",
+        )
+        logger.info(f"Started background cleanup (interval={self._cleanup_interval}s)")
+
+    async def _cleanup_loop(self) -> None:
+        """Background loop for periodic cleanup."""
+        try:
+            while not self._shutdown_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._shutdown_event.wait(),
+                        timeout=self._cleanup_interval,
+                    )
+                except asyncio.TimeoutError:
+                    # Время вышло — выполняем cleanup
+                    removed = await self.cleanup_inactive()
+                    if removed > 0:
+                        logger.info(f"Cleaned up {removed} inactive sessions")
+        except asyncio.CancelledError:
+            logger.info("Cleanup task cancelled")
+            raise
+
+    async def stop_background_cleanup(self) -> None:
+        """Stop background cleanup task.
+
+        This method should be called during application shutdown.
+        """
+        if self._cleanup_task is None:
+            return
+
+        self._shutdown_event.set()
+        try:
+            self._cleanup_task.cancel()
+            await self._cleanup_task
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._cleanup_task = None
+            logger.info("Background cleanup stopped")
+
     async def add_message(
         self,
         session_id: int,
         message: Message,
         session: Optional[Session] = None,
+        user_id: Optional[int] = None,
     ) -> None:
         """Add a message to the session's in-memory store.
 
@@ -81,24 +167,34 @@ class InMemorySessionStore:
             message: The message to store.
             session: Optional session object. If provided and session
                 doesn't exist, it will be created.
+            user_id: User identifier for creating new session. Required if
+                session is None and session doesn't exist.
 
         Raises:
-            InvalidDataError: If session_id is not positive or message is None.
+            InvalidDataError: If session_id is not positive, message is None,
+                or user_id is not provided when creating new session.
         """
         await self._validate_session_id(session_id)
         if message is None:
             raise InvalidDataError("message cannot be None")
 
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             if session_id not in self._sessions:
+                # Check max_sessions limit BEFORE creating new session
+                if len(self._sessions) >= self._max_sessions:
+                    await self._evict_oldest_session()
+
                 if session is None:
+                    if user_id is None:
+                        raise InvalidDataError(
+                            "user_id is required when creating a new session"
+                        )
                     session = Session(
                         session_id=session_id,
-                        user_id=1,
+                        user_id=user_id,
                         memory_mode=MemoryMode.SHORT_TERM,
-                        created_at=datetime.now(),
-                        last_activity=datetime.now(),
+                        created_at=datetime.now(timezone.utc),
+                        last_activity=datetime.now(timezone.utc),
                     )
                 self._sessions[session_id] = SessionData(
                     session=session,
@@ -108,10 +204,11 @@ class InMemorySessionStore:
             session_data = self._sessions[session_id]
             session_data.messages.append(message)
 
+            # Enforce max_messages limit
             while len(session_data.messages) > session_data.max_messages:
                 session_data.messages.popleft()
 
-            session_data.session.last_activity = datetime.now()
+            session_data.session.last_activity = datetime.now(timezone.utc)
 
     async def get_messages(self, session_id: int) -> List[Message]:
         """Get all messages for a session from memory.
@@ -125,8 +222,7 @@ class InMemorySessionStore:
         """
         await self._validate_session_id(session_id)
 
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             if session_id not in self._sessions:
                 return []
             return list(self._sessions[session_id].messages)
@@ -142,8 +238,7 @@ class InMemorySessionStore:
         """
         await self._validate_session_id(session_id)
 
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             if session_id in self._sessions:
                 del self._sessions[session_id]
                 return True
@@ -160,8 +255,7 @@ class InMemorySessionStore:
         """
         await self._validate_session_id(session_id)
 
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             if session_id in self._sessions:
                 return self._sessions[session_id].session
             return None
@@ -172,9 +266,8 @@ class InMemorySessionStore:
         Returns:
             Number of sessions removed.
         """
-        lock = self._get_lock()
-        async with lock:
-            now = datetime.now()
+        async with self._get_lock():
+            now = datetime.now(timezone.utc)
             to_remove = []
 
             for sid, session_data in self._sessions.items():
@@ -198,8 +291,7 @@ class InMemorySessionStore:
         Returns:
             List of session IDs currently in memory.
         """
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             return list(self._sessions.keys())
 
     async def get_size(self) -> int:
@@ -208,6 +300,55 @@ class InMemorySessionStore:
         Returns:
             Number of sessions in store.
         """
-        lock = self._get_lock()
-        async with lock:
+        async with self._get_lock():
             return len(self._sessions)
+
+    async def update_message(self, message: Message) -> bool:
+        """Update a message in the session's in-memory store.
+
+        Args:
+            message: Message entity with updated content.
+
+        Returns:
+            True if message was updated, False if not found.
+        """
+        await self._validate_session_id(message.session_id)
+
+        async with self._get_lock():
+            if message.session_id not in self._sessions:
+                return False
+
+            session_data = self._sessions[message.session_id]
+            for i, stored_msg in enumerate(session_data.messages):
+                if stored_msg.message_id == message.message_id:
+                    # Replace the message at the same position
+                    session_data.messages[i] = message
+                    session_data.session.last_activity = datetime.now(timezone.utc)
+                    return True
+
+            return False
+
+    async def delete_message(self, message_id: int, session_id: int) -> bool:
+        """Delete a message from the session's in-memory store.
+
+        Args:
+            message_id: Message identifier to delete.
+            session_id: Session identifier.
+
+        Returns:
+            True if message was deleted, False if not found.
+        """
+        await self._validate_session_id(session_id)
+
+        async with self._get_lock():
+            if session_id not in self._sessions:
+                return False
+
+            session_data = self._sessions[session_id]
+            for i, stored_msg in enumerate(session_data.messages):
+                if stored_msg.message_id == message_id:
+                    session_data.messages.remove(stored_msg)
+                    session_data.session.last_activity = datetime.now(timezone.utc)
+                    return True
+
+            return False

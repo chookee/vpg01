@@ -59,3 +59,29 @@ async def test_delete_session(sqlite_session_repo: SQLiteSessionRepository) -> N
 
     result = await sqlite_session_repo.get(1)
     assert result is None
+
+
+# =============================================================================
+# Exception Handling Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_update_mode_nonexistent_session_raises_error(
+    sqlite_session_repo: SQLiteSessionRepository,
+) -> None:
+    """Should raise SessionNotFoundError when updating non-existent session."""
+    from src.domain.exceptions import SessionNotFoundError
+
+    with pytest.raises(SessionNotFoundError, match="Session with id=999 not found"):
+        await sqlite_session_repo.update_mode(999, MemoryMode.LONG_TERM)
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_session_raises_error(
+    sqlite_session_repo: SQLiteSessionRepository,
+) -> None:
+    """Should raise SessionNotFoundError when deleting non-existent session."""
+    from src.domain.exceptions import SessionNotFoundError
+
+    with pytest.raises(SessionNotFoundError, match="Session with id=999 not found"):
+        await sqlite_session_repo.delete(999)

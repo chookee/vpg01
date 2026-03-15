@@ -1,4 +1,14 @@
-"""SQLite implementation of UserRepository."""
+"""SQLite implementation of UserRepository.
+
+Note:
+    This repository supports two modes of operation:
+    1. Standalone — creates its own connection for each operation
+    2. Transactional — uses an external connection from UnitOfWork
+
+    For full transactional integrity (stages 18-19), repositories
+    should be refactored to use a factory pattern with DI container.
+    See: doc/plan.md milestones 18-19
+"""
 
 import logging
 from contextlib import asynccontextmanager
@@ -17,17 +27,27 @@ logger = logging.getLogger(__name__)
 class SQLiteUserRepository(UserRepository):
     """SQLite implementation of UserRepository.
 
+    Supports optional external connection for use with UnitOfWork.
+
     Attributes:
         db_path: Path to SQLite database file.
+        _external_connection: Optional external connection (from UnitOfWork).
     """
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        connection: aiosqlite.Connection | None = None,
+    ) -> None:
         """Initialize repository with database path.
 
         Args:
             db_path: Absolute path to SQLite database file.
+            connection: Optional external connection for transactional mode.
+                If None, creates own connection for each operation.
         """
         self.db_path = db_path
+        self._external_connection = connection
 
     @asynccontextmanager
     async def _get_connection(self) -> AsyncGenerator[aiosqlite.Connection, None]:
@@ -37,17 +57,25 @@ class SQLiteUserRepository(UserRepository):
             Async SQLite connection with row factory and foreign keys enabled.
 
         Note:
-            Connection is automatically closed when context manager exits.
+            If external connection is provided (UnitOfWork mode), uses it
+            and does NOT close it (caller manages lifecycle).
+            Otherwise, creates own connection and closes when context exits.
             Foreign keys are enabled for data integrity.
         """
-        connection = await aiosqlite.connect(self.db_path, timeout=30.0)
-        try:
-            connection.row_factory = aiosqlite.Row
-            # Enable foreign keys for referential integrity
-            await connection.execute("PRAGMA foreign_keys = ON;")
-            yield connection
-        finally:
-            await connection.close()
+        if self._external_connection is not None:
+            # Transactional mode: use external connection (don't close)
+            self._external_connection.row_factory = aiosqlite.Row
+            await self._external_connection.execute("PRAGMA foreign_keys = ON;")
+            yield self._external_connection
+        else:
+            # Standalone mode: create own connection
+            connection = await aiosqlite.connect(self.db_path, timeout=30.0)
+            try:
+                connection.row_factory = aiosqlite.Row
+                await connection.execute("PRAGMA foreign_keys = ON;")
+                yield connection
+            finally:
+                await connection.close()
 
     async def _init_db(self) -> None:
         """Initialize database schema."""
@@ -168,20 +196,10 @@ class SQLiteUserRepository(UserRepository):
             ValueError: If telegram_id is None.
         """
         async with self._get_connection() as db:
-            cursor = await db.execute(
-                "SELECT 1 FROM users WHERE user_id = ?;",
-                (user.user_id,),
-            )
-            exists = await cursor.fetchone()
-
-            if not exists:
-                logger.warning(f"User {user.user_id} not found for update")
-                raise UserNotFoundError(user_id=user.user_id)
-
             if user.telegram_id is None:
                 raise ValueError("telegram_id cannot be set to None for update")
 
-            await db.execute(
+            cursor = await db.execute(
                 """
                 UPDATE users
                 SET telegram_id = ?, default_mode = ?
@@ -190,4 +208,9 @@ class SQLiteUserRepository(UserRepository):
                 (user.telegram_id, user.default_mode.value, user.user_id),
             )
             await db.commit()
+
+            if cursor.rowcount == 0:
+                logger.warning(f"User {user.user_id} not found for update")
+                raise UserNotFoundError(user_id=user.user_id)
+
             logger.debug(f"User {user.user_id} updated")

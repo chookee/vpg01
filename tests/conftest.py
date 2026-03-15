@@ -1,11 +1,13 @@
 """Pytest fixtures and configuration for VPg01 tests."""
 
+from datetime import datetime, timezone
 from typing import AsyncGenerator, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
 
+from src.application.dtos import SessionDTO
 from src.domain.entities.message import Message
 from src.domain.entities.session import Session
 from src.domain.entities.user import User
@@ -32,6 +34,7 @@ def mock_message_repository() -> MessageRepository:
     mock = MagicMock(spec=MessageRepository)
     mock.add = AsyncMock()
     mock.get_by_session = AsyncMock(return_value=[])
+    mock.get_by_id = AsyncMock(return_value=None)
     mock.update = AsyncMock()
     mock.delete = AsyncMock()
     mock.delete_by_session = AsyncMock()
@@ -144,6 +147,72 @@ def message_factory() -> Callable[..., Message]:
         )
 
     return _create_message
+
+
+# =============================================================================
+# Use Case Test Helpers
+# =============================================================================
+
+
+def create_test_message(
+    message_id: int = 1,
+    session_id: int = 1,
+    role: str = "user",
+    content: str = "Test message",
+    timestamp: datetime | None = None,
+    model_used: str | None = None,
+    memory_mode_at_time: MemoryMode | None = None,
+) -> Message:
+    """Helper function to create test Message entities.
+
+    Args:
+        message_id: Message identifier. Defaults to 1.
+        session_id: Session identifier. Defaults to 1.
+        role: Message role ('user' or 'assistant'). Defaults to 'user'.
+        content: Message content. Defaults to 'Test message'.
+        timestamp: Message timestamp. Defaults to current UTC time.
+        model_used: Model name used for generation.
+        memory_mode_at_time: Memory mode at message creation time.
+
+    Returns:
+        Message instance with specified parameters.
+    """
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc)
+    return Message(
+        message_id=message_id,
+        session_id=session_id,
+        role=role,
+        content=content,
+        timestamp=timestamp,
+        model_used=model_used,
+        memory_mode_at_time=memory_mode_at_time,
+    )
+
+
+def create_test_session_dto(
+    session_id: int = 1,
+    user_id: int = 1,
+    mode: MemoryMode = MemoryMode.SHORT_TERM,
+) -> SessionDTO:
+    """Helper function to create test SessionDTO instances.
+
+    Args:
+        session_id: Session identifier. Defaults to 1.
+        user_id: User identifier. Defaults to 1.
+        mode: Memory mode. Defaults to SHORT_TERM.
+
+    Returns:
+        SessionDTO instance with specified parameters.
+    """
+    now = datetime.now(timezone.utc)
+    return SessionDTO(
+        session_id=session_id,
+        user_id=user_id,
+        memory_mode=mode,
+        created_at=now,
+        last_activity=now,
+    )
 
 
 # =============================================================================

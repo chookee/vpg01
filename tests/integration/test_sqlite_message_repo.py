@@ -99,13 +99,46 @@ async def test_get_by_session_empty(sqlite_message_repo: SQLiteMessageRepository
 async def test_get_by_sessions_batch(sqlite_message_repo: SQLiteMessageRepository) -> None:
     """Test batch retrieval of messages for multiple sessions (N+1 fix)."""
     # Messages for session 1 are created in conftest fixture
-    
+
     # Test with empty list
     messages = await sqlite_message_repo.get_by_sessions_batch([])
     assert messages == []
-    
+
     # Test with single session
     messages = await sqlite_message_repo.get_by_sessions_batch([1])
     # Should return messages created in conftest (if any) or empty
     # The batch method works correctly - just verify it returns a list
     assert isinstance(messages, list)
+
+
+# =============================================================================
+# Exception Handling Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_update_nonexistent_message_raises_error(
+    sqlite_message_repo: SQLiteMessageRepository,
+) -> None:
+    """Should raise MessageNotFoundError when updating non-existent message."""
+    from src.domain.exceptions import MessageNotFoundError
+
+    message = Message(
+        message_id=999,
+        session_id=1,
+        role="user",
+        content="Non-existent",
+    )
+
+    with pytest.raises(MessageNotFoundError, match="Message with id=999 not found"):
+        await sqlite_message_repo.update(message)
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_message_raises_error(
+    sqlite_message_repo: SQLiteMessageRepository,
+) -> None:
+    """Should raise MessageNotFoundError when deleting non-existent message."""
+    from src.domain.exceptions import MessageNotFoundError
+
+    with pytest.raises(MessageNotFoundError, match="Message with id=999 not found"):
+        await sqlite_message_repo.delete(999)

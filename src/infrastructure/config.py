@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Database
+    database_type: str = Field(
+        default="sqlite",
+        min_length=1,
+        description="Database type: sqlite or postgresql",
+    )
     database_url: str = Field(
         ...,
         min_length=1,
@@ -75,6 +80,27 @@ class Settings(BaseSettings):
             )
 
         return value
+
+    @field_validator("database_type")
+    @classmethod
+    def validate_database_type(cls, value: str) -> str:
+        """Validate database type.
+
+        Args:
+            value: Database type from environment.
+
+        Returns:
+            Validated database type.
+
+        Raises:
+            ValueError: If database type is not supported.
+        """
+        allowed_types = {"sqlite", "postgresql"}
+        if value.lower() not in allowed_types:
+            raise ValueError(
+                f"Invalid DATABASE_TYPE: {value}. Allowed: {', '.join(allowed_types)}"
+            )
+        return value.lower()
 
     @field_validator("database_url")
     @classmethod

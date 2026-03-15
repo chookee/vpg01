@@ -175,9 +175,14 @@ class TestMessage:
         assert msg.memory_mode_at_time == MemoryMode.LONG_TERM
 
     def test_create_message_invalid_message_id(self) -> None:
-        """Test that invalid message_id raises ValueError."""
-        with pytest.raises(ValueError, match="message_id must be positive"):
-            Message(message_id=0, session_id=1, role="user", content="Test")
+        """Test that negative message_id raises ValueError."""
+        with pytest.raises(ValueError, match="message_id must be non-negative"):
+            Message(message_id=-1, session_id=1, role="user", content="Test")
+
+    def test_create_message_zero_message_id_allowed(self) -> None:
+        """Test that message_id=0 is allowed for new messages."""
+        msg = Message(message_id=0, session_id=1, role="user", content="Test")
+        assert msg.message_id == 0
 
     def test_create_message_invalid_session_id(self) -> None:
         """Test that invalid session_id raises ValueError."""

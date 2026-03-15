@@ -76,3 +76,24 @@ async def test_update_user(sqlite_user_repo: SQLiteUserRepository) -> None:
     retrieved = await sqlite_user_repo.get_by_id(1)
     assert retrieved is not None
     assert retrieved.default_mode == MemoryMode.BOTH
+
+
+# =============================================================================
+# Exception Handling Tests
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_update_nonexistent_user_raises_error(
+    sqlite_user_repo: SQLiteUserRepository,
+) -> None:
+    """Should raise UserNotFoundError when updating non-existent user."""
+    from src.domain.exceptions import UserNotFoundError
+
+    user = User(
+        user_id=999,
+        telegram_id=999,
+        default_mode=MemoryMode.SHORT_TERM,
+    )
+
+    with pytest.raises(UserNotFoundError, match="User with id=999 not found"):
+        await sqlite_user_repo.update(user)

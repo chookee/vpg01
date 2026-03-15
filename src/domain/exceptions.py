@@ -1,4 +1,14 @@
-"""Domain-specific exceptions."""
+"""Domain-specific exceptions.
+
+Exception hierarchy:
+    DomainError (base for all domain exceptions)
+    ├── InvalidDataError
+    ├── RepositoryError (base for repository errors)
+    │   ├── MessageNotFoundError
+    │   ├── SessionNotFoundError
+    │   └── UserNotFoundError
+    └── LLMServiceError
+"""
 
 
 class DomainError(Exception):
@@ -12,7 +22,15 @@ class InvalidDataError(DomainError):
         super().__init__(message)
 
 
-class MessageNotFoundError(DomainError):
+class RepositoryError(DomainError):
+    """Base exception for repository errors.
+
+    All repository-specific exceptions inherit from this class
+    to allow centralized error handling in use cases.
+    """
+
+
+class MessageNotFoundError(RepositoryError):
     """Raised when a message is not found."""
 
     def __init__(self, message_id: int) -> None:
@@ -20,7 +38,7 @@ class MessageNotFoundError(DomainError):
         super().__init__(f"Message with id={message_id} not found")
 
 
-class SessionNotFoundError(DomainError):
+class SessionNotFoundError(RepositoryError):
     """Raised when a session is not found."""
 
     def __init__(self, session_id: int) -> None:
@@ -28,7 +46,7 @@ class SessionNotFoundError(DomainError):
         super().__init__(f"Session with id={session_id} not found")
 
 
-class UserNotFoundError(DomainError):
+class UserNotFoundError(RepositoryError):
     """Raised when a user is not found."""
 
     def __init__(
@@ -40,3 +58,10 @@ class UserNotFoundError(DomainError):
             super().__init__(f"User with telegram_id={telegram_id} not found")
         else:
             super().__init__("User not found")
+
+
+class LLMServiceError(DomainError):
+    """Raised when LLM service fails."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"LLM service error: {message}")
