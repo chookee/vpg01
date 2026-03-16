@@ -126,20 +126,25 @@ class SQLiteSessionRepository(SessionRepository):
 
         Args:
             session: Session entity to create.
+
+        Raises:
+            ValueError: If user_id is None.
         """
         async with self._get_connection() as db:
+            if session.user_id is None:
+                raise ValueError("user_id cannot be None for session creation")
+
+            # session_id can be None for new entities - let SQLite assign it via AUTOINCREMENT
             await db.execute(
                 """
                 INSERT INTO sessions (
-                    session_id,
                     user_id,
                     memory_mode,
                     created_at,
                     last_activity
-                ) VALUES (?, ?, ?, ?, ?);
+                ) VALUES (?, ?, ?, ?);
                 """,
                 (
-                    session.session_id,
                     session.user_id,
                     session.memory_mode.value,
                     session.created_at.isoformat(),
@@ -147,7 +152,7 @@ class SQLiteSessionRepository(SessionRepository):
                 ),
             )
             await db.commit()
-            logger.debug(f"Session {session.session_id} created for user {session.user_id}")
+            logger.debug(f"Session created for user {session.user_id}")
 
     async def get(self, session_id: int) -> Session | None:
         """Get a session by ID.
@@ -195,6 +200,56 @@ class SQLiteSessionRepository(SessionRepository):
                 last_activity=last_activity,
             )
             logger.debug(f"Session {session_id} retrieved")
+            return session
+
+    async def get_by_user_id(self, user_id: int) -> Session | None:
+        """Get a session by user ID.
+
+        Args:
+            user_id: User identifier.
+
+        Returns:
+            Session entity or None if not found.
+        """
+        async with self._get_connection() as db:
+            cursor = await db.execute(
+                """
+                SELECT session_id, user_id, memory_mode, created_at, last_activity
+                FROM sessions
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1;
+                """,
+                (user_id,),
+            )
+            row = await cursor.fetchone()
+
+            if not row:
+                logger.debug(f"Session for user {user_id} not found")
+                return None
+
+            memory_mode = MemoryMode(row["memory_mode"])
+
+            created_at_str = row["created_at"]
+            if isinstance(created_at_str, str):
+                created_at = datetime.fromisoformat(created_at_str).replace(tzinfo=timezone.utc)
+            else:
+                created_at = created_at_str or datetime.now(timezone.utc)
+
+            last_activity_str = row["last_activity"]
+            if isinstance(last_activity_str, str):
+                last_activity = datetime.fromisoformat(last_activity_str).replace(tzinfo=timezone.utc)
+            else:
+                last_activity = last_activity_str or datetime.now(timezone.utc)
+
+            session = Session(
+                session_id=row["session_id"],
+                user_id=row["user_id"],
+                memory_mode=memory_mode,
+                created_at=created_at,
+                last_activity=last_activity,
+            )
+            logger.debug(f"Session {session.session_id} retrieved for user {user_id}")
             return session
 
     async def update_mode(self, session_id: int, memory_mode: MemoryMode) -> None:

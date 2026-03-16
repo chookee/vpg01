@@ -25,6 +25,34 @@ from src.infrastructure.config import get_settings
 from src.infrastructure.logging import setup_logger
 
 
+async def run_telegram_bot() -> int:
+    """Run Telegram bot.
+
+    Returns:
+        Exit code (0 for success, 1 for error).
+    """
+    logger = logging.getLogger(__name__)
+
+    try:
+        settings = get_settings()
+
+        if not settings.is_bot_configured():
+            logger.error("Telegram bot token not configured. Set TELEGRAM_BOT_TOKEN in .env")
+            return 1
+
+        logger.info("Building application container...")
+        app_container = build_app()
+
+        from src.interfaces.telegram_bot.bot import run_bot
+
+        await run_bot(settings.telegram_bot_token, app_container)
+        return 0
+
+    except Exception as e:
+        logger.exception(f"Bot error: {e}")
+        return 1
+
+
 @dataclass
 class ApplicationContainer:
     """Dependency injection container for application components.
@@ -37,6 +65,8 @@ class ApplicationContainer:
         view_history: Use case for viewing session history.
         edit_message: Use case for editing messages.
         delete_message: Use case for deleting messages.
+        export_history: Use case for exporting session history.
+        import_history: Use case for importing session history.
         repository_factory: Factory for creating repositories.
         db_path: Absolute path to database file.
         settings: Application settings instance.
@@ -55,6 +85,8 @@ class ApplicationContainer:
     view_history: Any
     edit_message: Any
     delete_message: Any
+    export_history: Any
+    import_history: Any
     repository_factory: Any
     db_path: str
     settings: Any
@@ -181,6 +213,8 @@ def build_app() -> ApplicationContainer:
         from src.application.use_cases.view_history import ViewHistory
         from src.application.use_cases.edit_message import EditMessage
         from src.application.use_cases.delete_message import DeleteMessage
+        from src.application.use_cases.export_history import ExportHistory
+        from src.application.use_cases.import_history import ImportHistory
 
         process_message = ProcessMessage(
             message_repo=message_repo,
@@ -207,6 +241,18 @@ def build_app() -> ApplicationContainer:
             short_term_store=short_term_store,
         )
 
+        export_history = ExportHistory(
+            message_repo=message_repo,
+            session_repo=session_repo,
+            short_term_store=short_term_store,
+        )
+
+        import_history = ImportHistory(
+            message_repo=message_repo,
+            session_repo=session_repo,
+            short_term_store=short_term_store,
+        )
+
         logger.info("Use cases created")
 
         # Create DB semaphore
@@ -217,6 +263,8 @@ def build_app() -> ApplicationContainer:
             view_history=view_history,
             edit_message=edit_message,
             delete_message=delete_message,
+            export_history=export_history,
+            import_history=import_history,
             repository_factory=repo_factory,
             db_path=db_path,
             settings=settings,
@@ -250,6 +298,10 @@ def _extract_db_path(database_url: str) -> str:
 def main() -> int:
     """Main application entry point.
 
+    Usage:
+        python -m src.main          # Run CLI application
+        python -m src.main --bot    # Run Telegram bot
+
     Returns:
         Exit code (0 for success, 1 for error).
     """
@@ -257,6 +309,11 @@ def main() -> int:
     try:
         settings = get_settings()
         logger = setup_logger(debug=settings.debug)
+
+        # Check for --bot flag
+        if len(sys.argv) > 1 and sys.argv[1] == "--bot":
+            logger.info("Starting Telegram bot...")
+            return asyncio.run(run_telegram_bot())
 
         logger.info("Hello, World!")
         logger.info("Application: %s", settings.app_name)
@@ -275,7 +332,8 @@ def main() -> int:
             "Application container built successfully."
         )
         logger.info(
-            "  Use cases: process_message, view_history, edit_message, delete_message"
+            "  Use cases: process_message, view_history, edit_message, delete_message,"
+            " export_history, import_history"
         )
         logger.info(
             "  Repository factory: available for custom repository creation"

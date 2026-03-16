@@ -116,7 +116,11 @@ class InMemorySessionStore(SessionStore):
         logger.info(f"Started background cleanup (interval={self._cleanup_interval}s)")
 
     async def _cleanup_loop(self) -> None:
-        """Background loop for periodic cleanup."""
+        """Background loop for periodic cleanup.
+
+        This loop runs until _shutdown_event is set.
+        It wakes up every _cleanup_interval seconds to clean up inactive sessions.
+        """
         try:
             while not self._shutdown_event.is_set():
                 try:
@@ -126,12 +130,20 @@ class InMemorySessionStore(SessionStore):
                     )
                 except asyncio.TimeoutError:
                     # Время вышло — выполняем cleanup
-                    removed = await self.cleanup_inactive()
-                    if removed > 0:
-                        logger.info(f"Cleaned up {removed} inactive sessions")
+                    try:
+                        removed = await self.cleanup_inactive()
+                        if removed > 0:
+                            logger.info(f"Cleaned up {removed} inactive sessions")
+                    except Exception as e:
+                        # Log error but continue running — don't crash the cleanup task
+                        logger.error(f"Cleanup error: {type(e).__name__}: {e}")
         except asyncio.CancelledError:
             logger.info("Cleanup task cancelled")
             raise
+        finally:
+            # Ensure task reference is cleared
+            self._cleanup_task = None
+            logger.debug("Cleanup task reference cleared")
 
     async def stop_background_cleanup(self) -> None:
         """Stop background cleanup task.

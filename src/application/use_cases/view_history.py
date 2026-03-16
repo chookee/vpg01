@@ -69,9 +69,9 @@ class ViewHistory:
         for msg in short_term_msgs:
             merged_dict[msg.message_id] = msg
 
-        # Сортируем по timestamp
+        # Сортируем по timestamp, затем по message_id для детерминированного порядка
         merged_list = list(merged_dict.values())
-        merged_list.sort(key=lambda m: m.timestamp)
+        merged_list.sort(key=lambda m: (m.timestamp, m.message_id))
 
         return merged_list
 

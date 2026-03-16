@@ -107,15 +107,16 @@ class SQLiteUserRepository(UserRepository):
             if user.telegram_id is None:
                 raise ValueError("telegram_id cannot be None for user creation")
 
+            # user_id can be None for new entities - let SQLite assign it via AUTOINCREMENT
             await db.execute(
                 """
-                INSERT INTO users (user_id, telegram_id, default_mode, created_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP);
+                INSERT INTO users (telegram_id, default_mode, created_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP);
                 """,
-                (user.user_id, user.telegram_id, user.default_mode.value),
+                (user.telegram_id, user.default_mode.value),
             )
             await db.commit()
-            logger.debug(f"User {user.user_id} created with telegram_id {user.telegram_id}")
+            logger.debug(f"User created with telegram_id {user.telegram_id}")
 
     async def get_by_id(self, user_id: int) -> User | None:
         """Get a user by ID.

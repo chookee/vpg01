@@ -153,6 +153,7 @@ class ContextBuilder:
             merged_dict[msg.message_id] = msg
 
         merged_list: List[Message] = list(merged_dict.values())
-        merged_list.sort(key=lambda m: m.timestamp)
+        # Sort by timestamp, then by message_id for deterministic order
+        merged_list.sort(key=lambda m: (m.timestamp, m.message_id))
 
         return merged_list
