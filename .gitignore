@@ -81,6 +81,9 @@ data/
 CONTINUITY_LEDGER.md
 CONTINUITY_PROMPT.md
 PRE_README.md
+run_desktop_clean.bat
+run_genapi.ps1
+pytest.ini
 
 # Test/Debug files (not for production)
 test_config.py
