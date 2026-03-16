@@ -53,6 +53,32 @@ async def run_telegram_bot() -> int:
         return 1
 
 
+def run_desktop_app() -> int:
+    """Run Desktop application (PyQt6).
+
+    Returns:
+        Exit code (0 for success, 1 for error).
+    """
+    try:
+        # Import here to avoid loading PyQt6 if not needed
+        from src.interfaces.desktop_app.main import main as desktop_main
+        return desktop_main()
+
+    except ImportError as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("Desktop app dependencies not installed: %s", e)
+        print(
+            f"Desktop app dependencies not installed: {e}\n"
+            f"Install with: pip install PyQt6>=6.6.0 qasync>=0.27.1",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("Desktop app error: %s", e)
+        return 1
+
+
 @dataclass
 class ApplicationContainer:
     """Dependency injection container for application components.
@@ -190,13 +216,11 @@ def build_app() -> ApplicationContainer:
         short_term_store = InMemorySessionStore()
         logger.debug("In-memory session store created")
 
-        # Create LLM service (stub implementation for now)
-        from src.infrastructure.llm.ollama_service import OllamaService
+        # Create LLM service via factory
+        from src.infrastructure.llm.factory import LLMServiceFactory
 
-        llm_service = OllamaService(
-            base_url=settings.ollama_base_url,
-            default_model=settings.ollama_model,
-        )
+        llm_factory = LLMServiceFactory(settings)
+        llm_service = llm_factory.create_service()
         logger.info("LLM service created: provider=%s", settings.llm_provider)
 
         # Create context builder
@@ -222,7 +246,8 @@ def build_app() -> ApplicationContainer:
             short_term_store=short_term_store,
             context_builder=context_builder,
             llm_service=llm_service,
-            default_model=settings.ollama_model,
+            default_model=llm_service.default_model,  # Use model from LLM service
+            llm_timeout=settings.ollama_timeout,
         )
 
         view_history = ViewHistory(
@@ -301,6 +326,7 @@ def main() -> int:
     Usage:
         python -m src.main          # Run CLI application
         python -m src.main --bot    # Run Telegram bot
+        python -m src.main --desktop  # Run Desktop app (PyQt6)
 
     Returns:
         Exit code (0 for success, 1 for error).
@@ -310,10 +336,14 @@ def main() -> int:
         settings = get_settings()
         logger = setup_logger(debug=settings.debug)
 
-        # Check for --bot flag
-        if len(sys.argv) > 1 and sys.argv[1] == "--bot":
-            logger.info("Starting Telegram bot...")
-            return asyncio.run(run_telegram_bot())
+        # Check for command-line flags
+        if len(sys.argv) > 1:
+            if sys.argv[1] == "--bot":
+                logger.info("Starting Telegram bot...")
+                return asyncio.run(run_telegram_bot())
+            elif sys.argv[1] == "--desktop":
+                logger.info("Starting Desktop application...")
+                return run_desktop_app()
 
         logger.info("Hello, World!")
         logger.info("Application: %s", settings.app_name)

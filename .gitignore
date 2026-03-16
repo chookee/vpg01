@@ -70,6 +70,17 @@ venv.bak/
 data/
 *.db
 *.sqlite3
+/.p
+/.idea
+/.mypy_cashe
+/.pytest_cashe
+/.venv
+/doc
+/examples
+/GenAPI
+CONTINUITY_LEDGER.md
+CONTINUITY_PROMPT.md
+PRE_README.md
 
 # Logs
 *.log

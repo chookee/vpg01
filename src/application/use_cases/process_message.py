@@ -70,6 +70,7 @@ class ProcessMessage:
         context_builder: ContextBuilder,
         llm_service: LLMService,
         default_model: str = "llama3",
+        llm_timeout: float = 60.0,
     ) -> None:
         """Initialize ProcessMessage use case.
 
@@ -80,6 +81,7 @@ class ProcessMessage:
             context_builder: Service for building conversation context.
             llm_service: LLM service for generating responses.
             default_model: Default model name for LLM generation.
+            llm_timeout: Timeout for LLM generation in seconds.
         """
         self._message_repo = message_repo
         self._session_repo = session_repo
@@ -87,6 +89,7 @@ class ProcessMessage:
         self._context_builder = context_builder
         self._llm_service = llm_service
         self._default_model = default_model
+        self._llm_timeout = llm_timeout
 
     async def execute(
         self,
@@ -119,9 +122,9 @@ class ProcessMessage:
             bind_context(user_id=session.user_id)  # Update with real user_id
 
             logger.info(
-                "processing_message",
-                user_text_length=len(user_text),
-                memory_mode=session.memory_mode.value,
+                "Processing message: user_text_length=%d, memory_mode=%s",
+                len(user_text),
+                session.memory_mode.value,
             )
 
             effective_mode = mode if mode is not None else session.memory_mode
@@ -139,16 +142,22 @@ class ProcessMessage:
 
             # Обработка исключений LLM с логированием
             try:
-                # Добавляем таймаут (30 секунд) для предотвращения hanging connections
-                async with asyncio.timeout(30):
+                # Добавляем таймаут для предотвращения hanging connections
+                # Таймаут берётся из конфигурации (llm_timeout)
+                async with asyncio.timeout(self._llm_timeout):
                     llm_response = await self._llm_service.generate(
                         prompt=user_text,
                         context=context,
                         model_params={"model": self._default_model},
                     )
             except asyncio.TimeoutError:
-                logger.error("llm_generation_timeout", timeout_seconds=30)
-                raise LLMServiceError("Generation timed out (30s limit exceeded)")
+                logger.error(
+                    "LLM generation timeout (%.1fs limit exceeded)",
+                    self._llm_timeout,
+                )
+                raise LLMServiceError(
+                    f"Generation timed out ({self._llm_timeout}s limit exceeded)"
+                )
             except LLMServiceError:
                 # Переподнимаем доменные исключения как есть
                 raise
@@ -157,8 +166,8 @@ class ProcessMessage:
                 if isinstance(e, (KeyboardInterrupt, SystemExit, asyncio.CancelledError)):
                     raise
                 logger.exception(
-                    "llm_generation_failed",
-                    extra={"error_type": type(e).__name__},
+                    "LLM generation failed: error_type=%s",
+                    type(e).__name__,
                 )
                 raise LLMServiceError(f"Failed to generate response: {e}")
 
@@ -177,9 +186,9 @@ class ProcessMessage:
             )
 
             logger.info(
-                "message_processed",
-                response_length=len(llm_response),
-                model_used=self._default_model,
+                "Message processed: response_length=%d, model_used=%s",
+                len(llm_response),
+                self._default_model,
             )
 
             return ProcessMessageResult(
@@ -305,7 +314,12 @@ class ProcessMessage:
             return user_message, assistant_message
 
         if mode in (MemoryMode.SHORT_TERM, MemoryMode.BOTH):
-            await self._save_to_short_term(user_message, assistant_message)
+            # Get session for user_id (required by in-memory store)
+            session = await self._session_repo.get(session_id=user_message.session_id)
+            # Save to short-term and get messages with assigned IDs
+            user_message, assistant_message = await self._save_to_short_term(
+                user_message, assistant_message, session
+            )
 
         if mode in (MemoryMode.LONG_TERM, MemoryMode.BOTH):
             # Сохраняем в БД и получаем сообщения с реальными ID
@@ -321,21 +335,48 @@ class ProcessMessage:
         self,
         user_message: Message,
         assistant_message: Message,
-    ) -> None:
-        """Save messages to short-term in-memory store.
+        session: Session,
+    ) -> tuple[Message, Message]:
+        """Save messages to short-term in-memory store and return with assigned IDs.
 
         Args:
             user_message: User message entity.
             assistant_message: Assistant message entity.
+            session: Session entity with user_id for in-memory store.
+
+        Returns:
+            Tuple of (user_message, assistant_message) with assigned message IDs.
         """
-        await self._short_term_store.add_message(
+        user_id = await self._short_term_store.add_message(
             session_id=user_message.session_id,
             message=user_message,
+            session=session,
         )
-        await self._short_term_store.add_message(
+        user_message_with_id = Message(
+            message_id=user_id,
+            session_id=user_message.session_id,
+            role=user_message.role,
+            content=user_message.content,
+            timestamp=user_message.timestamp,
+            memory_mode_at_time=user_message.memory_mode_at_time,
+        )
+        
+        assistant_id = await self._short_term_store.add_message(
             session_id=assistant_message.session_id,
             message=assistant_message,
+            session=session,
         )
+        assistant_message_with_id = Message(
+            message_id=assistant_id,
+            session_id=assistant_message.session_id,
+            role=assistant_message.role,
+            content=assistant_message.content,
+            timestamp=assistant_message.timestamp,
+            model_used=assistant_message.model_used,
+            memory_mode_at_time=assistant_message.memory_mode_at_time,
+        )
+        
+        return user_message_with_id, assistant_message_with_id
 
     async def _save_to_long_term_with_ids(
         self,

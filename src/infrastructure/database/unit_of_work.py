@@ -101,8 +101,9 @@ class UnitOfWork:
 
             yield self
 
-            await db.execute("COMMIT;")
-            logger.debug("Transaction committed")
+            if transaction_started:
+                await db.execute("COMMIT;")
+                logger.debug("Transaction committed")
 
         except Exception as e:
             if transaction_started:

@@ -1,7 +1,9 @@
-"""Tests for OllamaService stub implementation."""
+"""Tests for OllamaService implementation with retry logic."""
 
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
 
+import aiohttp
 import pytest
 
 from src.domain.entities.message import Message
@@ -43,41 +45,6 @@ def sample_context() -> list[Message]:
 
 
 @pytest.mark.asyncio
-async def test_generate_returns_echo(ollama_service: OllamaService) -> None:
-    """Test that generate returns echo response."""
-    prompt = "Hello, World!"
-    context: list[Message] = []
-
-    result = await ollama_service.generate(prompt, context)
-
-    assert result == "Echo: Hello, World!"
-
-
-@pytest.mark.asyncio
-async def test_generate_with_context(
-    ollama_service: OllamaService,
-    sample_context: list[Message],
-) -> None:
-    """Test that generate works with context messages."""
-    prompt = "Test with context"
-
-    result = await ollama_service.generate(prompt, sample_context)
-
-    assert result == "Echo: Test with context"
-
-
-@pytest.mark.asyncio
-async def test_generate_with_model_params(ollama_service: OllamaService) -> None:
-    """Test that generate accepts model parameters."""
-    prompt = "Test with params"
-    model_params = {"temperature": 0.7, "max_tokens": 100}
-
-    result = await ollama_service.generate(prompt, [], model_params)
-
-    assert result == "Echo: Test with params"
-
-
-@pytest.mark.asyncio
 async def test_generate_empty_prompt_raises(ollama_service: OllamaService) -> None:
     """Test that empty prompt raises LLMServiceError."""
     with pytest.raises(LLMServiceError, match="Prompt cannot be empty or None"):
@@ -96,26 +63,6 @@ async def test_generate_none_prompt_raises(ollama_service: OllamaService) -> Non
     """Test that None prompt raises LLMServiceError."""
     with pytest.raises(LLMServiceError, match="Prompt cannot be empty or None"):
         await ollama_service.generate(None, [])  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
-async def test_generate_with_special_characters(ollama_service: OllamaService) -> None:
-    """Test that generate handles special characters."""
-    prompt = "Test with special chars: !@#$%^&*()_+{}|:<>?"
-
-    result = await ollama_service.generate(prompt, [])
-
-    assert result == "Echo: Test with special chars: !@#$%^&*()_+{}|:<>?"
-
-
-@pytest.mark.asyncio
-async def test_generate_with_unicode(ollama_service: OllamaService) -> None:
-    """Test that generate handles Unicode characters."""
-    prompt = "Привет, мир! 你好世界 🌍"
-
-    result = await ollama_service.generate(prompt, [])
-
-    assert result == "Echo: Привет, мир! 你好世界 🌍"
 
 
 @pytest.mark.asyncio
@@ -157,3 +104,121 @@ async def test_inherits_from_llm_service() -> None:
     service = OllamaService()
 
     assert isinstance(service, LLMService)
+
+
+@pytest.mark.asyncio
+async def test_messages_to_ollama_format(ollama_service: OllamaService) -> None:
+    """Test message conversion to Ollama format."""
+    now = datetime.now(timezone.utc)
+    context = [
+        Message(
+            message_id=1,
+            session_id=1,
+            role="user",
+            content="Hello",
+            timestamp=now,
+        ),
+        Message(
+            message_id=2,
+            session_id=1,
+            role="assistant",
+            content="Hi there",
+            timestamp=now,
+        ),
+    ]
+    prompt = "How are you?"
+
+    messages = ollama_service._messages_to_ollama_format(prompt, context)
+
+    assert len(messages) == 3
+    assert messages[0] == {"role": "user", "content": "Hello"}
+    assert messages[1] == {"role": "assistant", "content": "Hi there"}
+    assert messages[2] == {"role": "user", "content": "How are you?"}
+
+
+@pytest.mark.asyncio
+async def test_generate_success_mock() -> None:
+    """Test successful generation with mocked HTTP client."""
+    service = OllamaService()
+    prompt = "Test prompt"
+
+    mock_response_data = {
+        "message": {"content": "Generated response"},
+    }
+
+    with patch.object(service, "_generate_with_retry", new_callable=AsyncMock) as mock_retry:
+        mock_retry.return_value = "Generated response"
+        result = await service.generate(prompt, [])
+
+        assert result == "Generated response"
+        mock_retry.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_with_retry_connection_error() -> None:
+    """Test retry behavior on connection error."""
+    service = OllamaService()
+    prompt = "Test prompt"
+
+    with patch.object(service, "_generate_with_retry", new_callable=AsyncMock) as mock_retry:
+        mock_retry.side_effect = aiohttp.ClientConnectionError("Connection failed")
+
+        with pytest.raises(LLMServiceError, match="Ollama generation failed"):
+            await service.generate(prompt, [])
+
+
+@pytest.mark.asyncio
+async def test_generate_rate_limit_error() -> None:
+    """Test rate limit error handling."""
+    service = OllamaService()
+    prompt = "Test prompt"
+
+    with patch.object(service, "_generate_with_retry", new_callable=AsyncMock) as mock_retry:
+        mock_retry.side_effect = LLMServiceError("Ollama rate limit exceeded")
+
+        with pytest.raises(LLMServiceError, match="rate limit"):
+            await service.generate(prompt, [])
+
+
+@pytest.mark.asyncio
+async def test_generate_api_error() -> None:
+    """Test API error handling."""
+    service = OllamaService()
+    prompt = "Test prompt"
+
+    with patch.object(service, "_generate_with_retry", new_callable=AsyncMock) as mock_retry:
+        mock_retry.side_effect = LLMServiceError("Ollama API error: 500")
+
+        with pytest.raises(LLMServiceError, match="Ollama API error"):
+            await service.generate(prompt, [])
+
+
+@pytest.mark.asyncio
+async def test_generate_with_model_params() -> None:
+    """Test generation with model parameters."""
+    service = OllamaService()
+    prompt = "Test with params"
+    model_params = {"temperature": 0.7, "max_tokens": 100, "model": "mistral"}
+
+    with patch.object(service, "_generate_with_retry", new_callable=AsyncMock) as mock_retry:
+        mock_retry.return_value = "Response"
+        await service.generate(prompt, [], model_params)
+
+        mock_retry.assert_called_once()
+        call_args = mock_retry.call_args
+        # Verify model parameter is passed
+        assert call_args[0][1] == "mistral"
+
+
+@pytest.mark.asyncio
+async def test_close_session() -> None:
+    """Test session cleanup."""
+    service = OllamaService()
+
+    # Create session
+    await service._get_session()
+    assert service._session is not None
+
+    # Close session
+    await service.close()
+    assert service._session is None or service._session.closed

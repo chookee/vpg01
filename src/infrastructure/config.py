@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="ollama", min_length=1)
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="llama3", min_length=1)
+    ollama_timeout: float = Field(default=60.0, ge=1.0)
+    ollama_max_retries: int = Field(default=3, ge=1)
+
+    # GenAPI settings
+    genapi_key: str | None = Field(default=None, min_length=1)
+    genapi_base_url: str = Field(default="https://api.gen-api.ru/api/v1")
+    genapi_model: str = Field(default="gpt-4o-mini", min_length=1)
+    genapi_timeout: float = Field(default=60.0, ge=1.0)
+    genapi_poll_timeout: float = Field(default=120.0, ge=1.0)
+    genapi_max_retries: int = Field(default=3, ge=1)
 
     # Telegram (optional, validated separately)
     telegram_bot_token: str | None = Field(
@@ -143,6 +153,59 @@ class Settings(BaseSettings):
 
         return value
 
+    @field_validator("llm_provider")
+    @classmethod
+    def validate_llm_provider(cls, value: str) -> str:
+        """Validate LLM provider.
+
+        Args:
+            value: Provider name from environment.
+
+        Returns:
+            Validated provider name.
+
+        Raises:
+            ValueError: If provider is not supported.
+        """
+        allowed_providers = {"ollama", "genapi"}
+        if value.lower() not in allowed_providers:
+            raise ValueError(
+                f"Invalid LLM_PROVIDER: {value}. Allowed: {', '.join(allowed_providers)}"
+            )
+        return value.lower()
+
+    @field_validator("genapi_key")
+    @classmethod
+    def validate_genapi_key(cls, value: str | None) -> str | None:
+        """Validate GenAPI key.
+
+        Args:
+            value: API key from environment.
+
+        Returns:
+            Validated key or None if not configured.
+        """
+        if value is None or value == "":
+            return None
+
+        if value == "your_genapi_key_here":
+            warnings.warn(
+                "GENAPI_KEY is set to placeholder value. "
+                "Update .env with real key or leave empty to disable GenAPI.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+
+        # GenAPI keys are typically 32+ characters
+        if len(value) < 16:
+            raise ValueError(
+                f"Invalid GenAPI key length: {len(value)} chars (expected >= 16). "
+                "Check GENAPI_KEY in .env"
+            )
+
+        return value
+
     def is_bot_configured(self) -> bool:
         """Check if Telegram bot is configured.
 
@@ -150,6 +213,14 @@ class Settings(BaseSettings):
             True if bot token is configured, False otherwise.
         """
         return self.telegram_bot_token is not None
+
+    def is_genapi_configured(self) -> bool:
+        """Check if GenAPI is configured.
+
+        Returns:
+            True if GenAPI key is configured, False otherwise.
+        """
+        return self.genapi_key is not None
 
 
 def get_settings() -> Settings:

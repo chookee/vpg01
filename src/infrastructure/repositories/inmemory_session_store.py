@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Deque, Dict, Final, List, Optional
+import itertools
 
 from src.domain.entities.message import Message
 from src.domain.entities.session import Session
@@ -64,6 +65,8 @@ class InMemorySessionStore(SessionStore):
         self._lock: asyncio.Lock | None = None
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
+        # Counter for generating unique message IDs (starts from 1_000_000 to avoid collision with DB IDs)
+        self._message_id_counter = itertools.count(1_000_000)
 
     def _get_lock(self) -> asyncio.Lock:
         """Get or create lock bound to current event loop.
@@ -169,10 +172,11 @@ class InMemorySessionStore(SessionStore):
         message: Message,
         session: Optional[Session] = None,
         user_id: Optional[int] = None,
-    ) -> None:
+    ) -> int:
         """Add a message to the session's in-memory store.
 
         Creates a new session entry if it doesn't exist.
+        Assigns a unique message ID from internal counter.
 
         Args:
             session_id: The session identifier.
@@ -181,6 +185,9 @@ class InMemorySessionStore(SessionStore):
                 doesn't exist, it will be created.
             user_id: User identifier for creating new session. Required if
                 session is None and session doesn't exist.
+
+        Returns:
+            Assigned message ID (integer starting from 1_000_000 to avoid collision with DB IDs).
 
         Raises:
             InvalidDataError: If session_id is not positive, message is None,
@@ -214,13 +221,28 @@ class InMemorySessionStore(SessionStore):
                 )
 
             session_data = self._sessions[session_id]
-            session_data.messages.append(message)
+            
+            # Assign unique negative ID to avoid collision with DB IDs
+            assigned_id = next(self._message_id_counter)
+            message_with_id = Message(
+                message_id=assigned_id,
+                session_id=message.session_id,
+                role=message.role,
+                content=message.content,
+                timestamp=message.timestamp,
+                model_used=message.model_used,
+                memory_mode_at_time=message.memory_mode_at_time,
+            )
+            
+            session_data.messages.append(message_with_id)
 
             # Enforce max_messages limit
             while len(session_data.messages) > session_data.max_messages:
                 session_data.messages.popleft()
 
             session_data.session.last_activity = datetime.now(timezone.utc)
+            
+            return assigned_id
 
     async def get_messages(self, session_id: int) -> List[Message]:
         """Get all messages for a session from memory.

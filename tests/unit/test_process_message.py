@@ -151,10 +151,14 @@ class TestProcessMessageShortTermMode:
         mock_session_repo.get.return_value = session
         mock_context_builder.build_context.return_value = []
         mock_llm_service.generate.return_value = "Echo: Hello"
+        # Mock add_message to return assigned IDs (positive integers)
+        mock_short_term_store.add_message.side_effect = [1, 2]
 
         result = await process_message.execute(session_id=1, user_text="Hello")
 
         assert result.response == "Echo: Hello"
+        assert result.user_message.message_id == 1
+        assert result.assistant_message.message_id == 2
 
         mock_message_repo.add.assert_not_called()
         assert mock_short_term_store.add_message.call_count == 2
@@ -209,6 +213,7 @@ class TestProcessMessageBothMode:
         mock_llm_service.generate.return_value = "Echo: Both"
         # Mock add to return assigned IDs
         mock_message_repo.add.side_effect = [1, 2]
+        mock_short_term_store.add_message.side_effect = [1, 2]
 
         result = await process_message.execute(session_id=1, user_text="Both")
 
@@ -226,6 +231,7 @@ class TestProcessMessageBothMode:
         mock_context_builder: ContextBuilder,
         mock_llm_service: LLMService,
         mock_message_repo: MessageRepository,
+        mock_short_term_store: SessionStore,
     ) -> None:
         """Should call context builder with session's memory mode."""
         session = create_test_session_dto(mode=MemoryMode.BOTH)
@@ -233,6 +239,7 @@ class TestProcessMessageBothMode:
         mock_llm_service.generate.return_value = "Response"
         # Mock add to return assigned IDs
         mock_message_repo.add.side_effect = [1, 2]
+        mock_short_term_store.add_message.side_effect = [1, 2]
 
         await process_message.execute(session_id=1, user_text="Test")
 
@@ -274,12 +281,15 @@ class TestProcessMessageResult:
         mock_session_repo: SessionRepository,
         mock_context_builder: ContextBuilder,
         mock_llm_service: LLMService,
+        mock_short_term_store: SessionStore,
     ) -> None:
         """Should return ProcessMessageResult with all required fields."""
         session = create_test_session_dto(mode=MemoryMode.SHORT_TERM)
         mock_session_repo.get.return_value = session
         mock_context_builder.build_context.return_value = []
         mock_llm_service.generate.return_value = "Test response"
+        # Mock add_message to return assigned IDs
+        mock_short_term_store.add_message.side_effect = [1, 2]
 
         result = await process_message.execute(session_id=1, user_text="Hello")
 
@@ -291,6 +301,8 @@ class TestProcessMessageResult:
         assert result.assistant_message.role == "assistant"
         assert result.user_message.content == "Hello"
         assert result.assistant_message.content == "Test response"
+        assert result.user_message.message_id == 1
+        assert result.assistant_message.message_id == 2
 
     async def test_returns_messages_with_assigned_ids(
         self,

@@ -214,11 +214,14 @@ class ImportHistory:
                 await self._message_repo.add(message)
                 result.imported_count += 1
 
-                # Also save to short-term storage
-                await self._short_term_store.add_message(
-                    session_id=session_id,
-                    message=message,
-                )
+                # Also save to short-term storage (with session for user_id)
+                session = await self._session_repo.get(session_id)
+                if session:
+                    await self._short_term_store.add_message(
+                        session_id=session_id,
+                        message=message,
+                        session=session,
+                    )
 
             except Exception as e:
                 error_msg = f"Failed to import message {msg_data.get('message_id', '?')}: {e}"
