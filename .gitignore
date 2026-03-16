@@ -82,6 +82,14 @@ CONTINUITY_LEDGER.md
 CONTINUITY_PROMPT.md
 PRE_README.md
 
+# Test/Debug files (not for production)
+test_config.py
+test_env_debug.py
+scripts/test_*.py
+*.version
+0.*
+3.*
+
 # Logs
 *.log
 logs/
